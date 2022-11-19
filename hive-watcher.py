@@ -36,7 +36,6 @@ def get_client(
             "https://api.hive.blog",
             "https://api.deathwing.me",
             "https://api.openhive.network",
-            "https://hive-api.3speak.tv",
             "https://rpc.ausbit.dev",
         ]
         client = Client(
