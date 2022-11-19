@@ -1,7 +1,9 @@
+import itertools
 import json
 import logging
-import time
 import sys
+import time
+from collections import deque
 from datetime import timedelta
 from timeit import default_timer as timer
 from typing import Set
@@ -30,8 +32,16 @@ def get_client(
     api_type="condenser_api",
 ) -> Client:
     try:
+        nodes = [
+            "https://api.hive.blog",
+            "https://api.deathwing.me",
+            "https://api.openhive.network",
+            "https://hive-api.3speak.tv",
+            "https://rpc.ausbit.dev",
+        ]
         client = Client(
             connect_timeout=connect_timeout,
+            nodes=nodes,
             read_timeout=read_timeout,
             loglevel=loglevel,
             automatic_node_selection=automatic_node_selection,
@@ -46,7 +56,7 @@ def get_client(
 
 
 def get_allowed_accounts(
-    client: Client = None, account_name: str = "podping"
+    client: Client = None, account_name: str = "podping", num_retires = 3
 ) -> Set[str]:
     """get a list of all accounts allowed to post by acc_name (podping)
     and only react to these accounts"""
@@ -54,9 +64,16 @@ def get_allowed_accounts(
     if not client:
         client = get_client(connect_timeout=3, read_timeout=3)
 
-    master_account = client.account(account_name)
-    return set(master_account.following())
-
+    for _ in range(num_retires):
+        try:
+            master_account = client.account(account_name)
+            return set(master_account.following())
+        except (KeyError, RPCNodeException):
+            logging.warning(f"Unable to get account followers - retrying")
+        except Exception as e:
+            logging.warning(f"Unable to get account followers: {e} - retrying")
+        finally:
+            client.next_node()
 
 def allowed_op_id(operation_id: str) -> bool:
     """Checks if the operation_id is in the allowed list"""
@@ -67,6 +84,20 @@ def output(post) -> int:
     """Prints out the post and extracts the custom_json"""
 
     data = json.loads(post["op"][1]['json'])
+
+    if Config.json:
+        if Config.hive_properties:
+            data["hiveTxId"] = post["trx_id"]
+            data["hiveBlockNum"] = post["block"]
+        print(json.dumps(data))
+        if "iris" in data:
+            return len(data["iris"])
+        if "urls" in data:
+            return data["num_urls"]
+        if "url" in data:
+            return 1
+        return -1
+
     data["medium_reason"] = "podcast update"
 
     # Check version of Podping and :
@@ -83,10 +114,7 @@ def output(post) -> int:
             return 1
 
     if Config.urls_only or Config.json:
-        if Config.json:
-            print(post["op"][1]['json'])
-            return data["num_urls"]
-        elif data.get("url"):
+        if data.get("url"):
             print(data.get("url"))
             # These calls do nothing if sockets are not open
             # ZMQ Socket will block until it receives acknowledgement
@@ -176,11 +204,21 @@ def output_status(
 def historical_block_stream_generator(client, start_block, end_block):
     batch_size = 50
     num_in_batch = 0
+
+    current_batch = deque()
     for block_num in range(start_block, end_block):
         client.get_ops_in_block(block_num, batch=True)
+        current_batch.append(block_num)
         num_in_batch += 1
         if num_in_batch == batch_size or block_num == end_block:
-            batch = client.process_batch()
+            while True:
+                try:
+                    batch = client.process_batch()
+                    current_batch.clear()
+                    break
+                except RPCNodeException:
+                    for b in current_batch:
+                        client.get_ops_in_block(b, batch=True)
             for ops in batch:
                 for post in ops:
                     if post['op'][0] == 'custom_json':
@@ -214,7 +252,7 @@ def listen_for_custom_json_operations(condenser_api_client, start_block):
                         yield {
                             "block": current_block,
                             "timestamp": block['block']['timestamp'],
-                            "trx_id": op[0],
+                            "trx_id": block['block']['transaction_ids'][op[0]],
                             "op": [
                                 'custom_json',
                                 op[1]['value'],
@@ -235,6 +273,7 @@ def listen_for_custom_json_operations(condenser_api_client, start_block):
             time.sleep(sleep_time)
 
 
+
 def scan_chain(client: Client, history: bool, start_block=None):
     """Either scans the old chain (history == True) or watches the live blockchain"""
 
@@ -247,7 +286,8 @@ def scan_chain(client: Client, history: bool, start_block=None):
     scan_start_time = pendulum.now()
     report_timedelta = pendulum.duration(minutes=Config.report_minutes)
 
-    allowed_accounts = get_allowed_accounts(client)
+    #allowed_accounts = get_allowed_accounts(client)
+    #allowed_accounts_start_time = pendulum.now()
 
     count_posts = 0
     pings = 0
@@ -288,10 +328,10 @@ def scan_chain(client: Client, history: bool, start_block=None):
                     pings = 0
 
             if allowed_op_id(post["op"][1]["id"]):
-                if set(post["op"][1]["required_posting_auths"]) & allowed_accounts:
-                    count = output(post)
-                    pings += count
-                    Pings.total_pings += count
+                #if set(post["op"][1]["required_posting_auths"]) & allowed_accounts:
+                count = output(post)
+                pings += count
+                Pings.total_pings += count
 
             if Config.diagnostic:
                 if post["op"][1]["id"] in list(Config.DIAGNOSTIC_OPERATION_IDS):
@@ -314,19 +354,18 @@ def scan_chain(client: Client, history: bool, start_block=None):
                         logging.info(f"block_num: {post['block']}")
                     # Break out of the for loop we've caught up.
                     break
-            else:
-                if time_dif > pendulum.duration(hours=1):
-                    # Re-fetch the allowed_accounts every hour in case we add one.
-                    while True:
-                        try:
-                            allowed_accounts = get_allowed_accounts()
-                            break
-                        except RPCNodeException:
-                            pass
+            #else:
+            #    allowed_accounts_time_diff = pendulum.now() - allowed_accounts_start_time
+            #    if allowed_accounts_time_diff > pendulum.duration(hours=1):
+            #        # Re-fetch the allowed_accounts every hour in case we add one.
+            #        allowed_accounts = get_allowed_accounts()
+            #        allowed_accounts_start_time = pendulum.now()
 
 
     except Exception as ex:
+        logging.exception(ex)
         logging.error(f"Exception: {ex}")
+        logging.error(f"Error with node {client.current_node}")
         logging.warning("Exception being handled | restarting")
         raise UnspecifiedHiveException(ex)
 
@@ -364,7 +403,12 @@ def main() -> None:
         start_block = scan_chain(client, history=True, start_block=Config.block_num)
 
     if start_block is None:
-        start_block = client.get_dynamic_global_properties()["head_block_number"]
+        while True:
+            try:
+                start_block = client.get_dynamic_global_properties()["head_block_number"]
+                break
+            except RPCNodeException:
+                pass
     else:
         start_block += 1
 
@@ -382,6 +426,9 @@ if __name__ == "__main__":
     while True:
         try:
             main()
+        except KeyboardInterrupt:
+            logging.info("Terminated with Ctrl-C")
+            sys.exit(1)
         except Exception as ex:
             logging.error(f"Error: {ex}", exc_info=True)
             logging.error("Restarting the watcher")
