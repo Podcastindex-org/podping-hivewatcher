@@ -100,7 +100,7 @@ def output(post) -> int:
     data["medium_reason"] = "podcast update"
 
     # Check version of Podping and :
-    if data.get("version") == "1.0":
+    if data.get("version") in {"1.0", "1.1"}:
         if data.get("iris"):
             data["urls"] = data.get("iris")
             data["num_urls"] = len(data["iris"])
