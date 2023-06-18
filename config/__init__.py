@@ -296,7 +296,7 @@ class Config:
                 print(f"Exception: {ex}")
 
     @classmethod
-    def setup(cls):
+    def setup(cls, client: Client):
         """Setup the config"""
         if cls.test:
             cls.use_test_node = True
@@ -329,7 +329,6 @@ class Config:
         # We are looking for some kind of history
         if cls.old or cls.block_num or cls.unix_epoch or cls.start_date:
             cls.history = True
-            client = Client()
             if cls.block_num:
                 while True:
                     try:

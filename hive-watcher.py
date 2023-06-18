@@ -385,7 +385,9 @@ def main() -> None:
         format=f"%(asctime)s | %(levelname)s %(name)s %(threadName)s : |  %(message)s",
         datefmt="%Y-%m-%dT%H:%M:%S%z",
     )
-    Config.setup()
+
+    client = get_client(connect_timeout=3, read_timeout=3, automatic_node_selection=False)
+    Config.setup(client)
 
     """ do we want periodic reports? """
     if Config.show_reports:
@@ -394,7 +396,6 @@ def main() -> None:
         else:
             logging.info("---------------> Using Main Hive Chain ")
 
-    client = get_client(connect_timeout=3, read_timeout=3, automatic_node_selection=False)
     start_block = None
 
     # scan_history will look back over the last 1 hour reporting every 15 minute chunk
