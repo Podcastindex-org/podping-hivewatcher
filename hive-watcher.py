@@ -24,6 +24,19 @@ class UnspecifiedHiveException(Exception):
     pass
 
 
+NODES_FOR_HISTORY_GENERATION = frozenset({
+    "https://api.hive.blog",
+    "https://api.openhive.network",
+    "https://hived.emre.sh",
+    "https://hive-api.arcange.eu",
+    "https://rpc.mahdiyari.info",
+})
+NODES_WITHOUT_HISTORY_GENERATION = frozenset({
+    "https://rpc.podping.org",
+    "https://rpc.ecency.com",
+})
+
+
 def get_client(
     connect_timeout=3,
     read_timeout=30,
@@ -32,12 +45,11 @@ def get_client(
     api_type="condenser_api",
 ) -> Client:
     try:
-        nodes = [
-            "https://api.hive.blog",
-            "https://api.deathwing.me",
-            "https://api.openhive.network",
-            "https://rpc.ausbit.dev",
-        ]
+        nodes = NODES_FOR_HISTORY_GENERATION
+
+        if api_type == "block_api":
+            nodes |= NODES_WITHOUT_HISTORY_GENERATION
+
         client = Client(
             connect_timeout=connect_timeout,
             nodes=nodes,
@@ -73,6 +85,7 @@ def get_allowed_accounts(
             logging.warning(f"Unable to get account followers: {e} - retrying")
         finally:
             client.next_node()
+
 
 def allowed_op_id(operation_id: str) -> bool:
     """Checks if the operation_id is in the allowed list"""
@@ -229,7 +242,7 @@ def listen_for_custom_json_operations(condenser_api_client, start_block):
     current_block = start_block
     if not current_block:
         current_block = condenser_api_client.get_dynamic_global_properties()["head_block_number"]
-    block_client = get_client(connect_timeout=3, read_timeout=3, automatic_node_selection=True, api_type="block_api")
+    block_client = get_client(connect_timeout=3, read_timeout=3, api_type="block_api")
     while True:
         start_time = timer()
         while True:
